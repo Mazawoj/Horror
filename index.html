@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nawiedzony Dom - Horror HTML5</title>
+    <style>
+        body { margin: 0; padding: 0; background: black; font-family: 'Courier New', monospace; overflow: hidden; }
+        canvas { display: block; cursor: none; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        let WIDTH = canvas.width;
+        let HEIGHT = canvas.height;
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            WIDTH = canvas.width;
+            HEIGHT = canvas.height;
+        });
+
+        // Game state
+        let state = 'menu';
+        let currentRoom = 'hol';
+        let inventory = [];
+        let health = 100;
+        let message = '';
+        let messageTimer = 0;
+        let flicker = 0;
+        let ghostTimer = 0;
+
+        // Fonts (simulated with ctx)
+        function getFont(size) {
+            return `${size}px 'Courier New', monospace`;
+        }
+
+        // Rooms definition (full from previous)
+        const rooms = {
+            hol: { desc: 'Stoisz w mrocznym holu starego, nawiedzonego domu. Burza szaleje za oknami. Słyszysz odległe skrzypienie.', options: ['1. Idź do salonu', '2. Wejdź do kuchni', '3. Schodź do piwnicy', '4. Wejdź po schodach na piętro'], targets: ['salon', 'kuchnia', 'piwnica', 'pietro_landing'], bgColor: [20, 20, 30] },
+            salon: { desc: 'Salon zawalony starymi meblami. Stary telewizor mruga słabym światłem. Zimne powietrze owiewa kark.', options: ['1. Podejdź do telewizora', '2. Otwórz starą szafkę', '3. Wróć do holu'], targets: ['salon', 'salon', 'hol'], bgColor: [30, 10, 10] },
+            kuchnia: { desc: 'Kuchnia cuchnie zgnilizną i pleśnią. Na stole leży zardzewiały nóż. Drzwi do łazienki uchylone.', options: ['1. Weź nóż ze stołu', '2. Otwórz lodówkę', '3. Idź do łazienki', '4. Wróć do holu'], targets: ['kuchnia', 'kuchnia', 'lazienka', 'hol'], bgColor: [10, 30, 10] },
+            lazienka: { desc: 'Wilgotna łazienka. Z wanny unosi się para, woda jest czerwonawa. Nad umywalką duże lustro.', options: ['1. Zajrzyj do wanny', '2. Spójrz w lustro', '3. Wróć do kuchni'], targets: ['lazienka', 'lazienka', 'kuchnia'], bgColor: [0, 20, 40] },
+            piwnica: { desc: 'Wilgotna, ciemna piwnica. Woda kapie z sufitu. Szelest w cieniu. Głębiej widać jakieś pudełka.', options: ['1. Użyj latarki (jeśli masz)', '2. Idź głębiej w ciemność', '3. Wróć na górę'], targets: ['piwnica', 'piwnica', 'hol'], bgColor: [5, 5, 15] },
+            pietro_landing: { desc: 'Korytarz na piętrze. Drzwi do dwóch sypialni i na strych. Podłoga skrzypi pod nogami.', options: ['1. Sypialnia 1 (po lewej)', '2. Sypialnia 2 (po prawej)', '3. Wejdź na strych', '4. Zejdź na dół'], targets: ['sypialnia1', 'sypialnia2', 'strych', 'hol'], bgColor: [25, 25, 35] },
+            sypialnia1: { desc: 'Pierwsza sypialnia. Stare łóżko i skrzynia pod nim. Zamknięta szafa w kącie.', options: ['1. Otwórz skrzynię pod łóżkiem', '2. Otwórz szafę', '3. Wróć na korytarz'], targets: ['sypialnia1', 'sypialnia1', 'pietro_landing'], bgColor: [40, 20, 20] },
+            sypialnia2: { desc: 'Druga sypialnia. Wielkie lustro na ścianie i duże łóżko. Coś szeleści pod materacem.', options: ['1. Podejdź do lustra', '2. Zajrzyj pod łóżko', '3. Wróć na korytarz'], targets: ['sypialnia2', 'sypialnia2', 'pietro_landing'], bgColor: [35, 20, 25] },
+            strych: { desc: 'Zapchany strych pełen pajęczyn i starych pudeł. Na końcu łańcuchowe drzwi.', options: ['1. Podejdź do łańcuchowych drzwi', '2. Przeszukaj stare pudła', '3. Wróć na dół'], targets: ['strych', 'strych', 'pietro_landing'], bgColor: [15, 15, 25] }
+        };
+
+        function wrapText(text, maxWidth, fontSize) {
+            ctx.font = getFont(fontSize);
+            const words = text.split(' ');
+            const lines = [];
+            let line = '';
+            for (let word of words) {
+                const test = line + word + ' ';
+                if (ctx.measureText(test).width < maxWidth) {
+                    line = test;
+                } else {
+                    lines.push(line.trim());
+                    line = word + ' ';
+                }
+            }
+            if (line) lines.push(line.trim());
+            return lines;
+        }
+
+        function drawBackground(room) {
+            ctx.fillStyle = `rgb(${room.bgColor[0]}, ${room.bgColor[1]}, ${room.bgColor[2]})`;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Walls/floor simple
+            ctx.fillStyle = 'rgb(64,64,64)';
+            ctx.fillRect(0, 0, 80, HEIGHT); // left wall
+            ctx.fillRect(WIDTH-80, 0, 80, HEIGHT); // right wall
+            ctx.fillRect(0, HEIGHT-80, WIDTH, 80); // floor
+            ctx.fillStyle = 'rgb(128,128,128)';
+            ctx.fillRect(0, 0, WIDTH, 120); // ceiling
+        }
+
+        function drawGhost() {
+            const x = WIDTH / 2 + (Math.random() - 0.5) * 200;
+            const y = HEIGHT / 2 + (Math.random() - 0.5) * 100;
+            ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            ctx.beginPath();
+            ctx.arc(x, y-80, 30, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(x, y-20, 40, 60, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(x-15, y-85, 8, 0, Math.PI*2);
+            ctx.arc(x+15, y-85, 8, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x, y-50, 10, 0, Math.PI);
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+            if (state === 'menu') {
+                ctx.fillStyle = 'red';
+                ctx.font = getFont(48);
+                ctx.textAlign = 'center';
+                ctx.fillText('NAWIEDZONY DOM', WIDTH/2, HEIGHT/2 - 50);
+                ctx.fillStyle = 'white';
+                ctx.font = getFont(36);
+                ctx.fillText('Naciśnij SPACE aby rozpocząć koszmar', WIDTH/2, HEIGHT/2 + 50);
+                ctx.font = getFont(24);
+                ctx.fillText('Sterowanie: 1-4 wybór, R restart, ESC wyjście', WIDTH/2, HEIGHT/2 + 120);
+                ctx.textAlign = 'left';
+            } else if (state === 'game') {
+                const room = rooms[currentRoom];
+                drawBackground(room);
+
+                // Random ghost
+                if (Math.random() < 0.01) {
+                    drawGhost();
+                    ghostTimer = 30;
+                }
+                if (ghostTimer > 0) {
+                    ctx.globalAlpha = 0.3;
+                    drawGhost();
+                    ctx.globalAlpha = 1;
+                    ghostTimer--;
+                }
+
+                // Flicker jumpscare
+                if (flicker > 0) {
+                    ctx.fillStyle = `rgba(255,0,0,${0.5 + Math.random()*0.3})`;
+                    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                    flicker--;
+                }
+
+                // UI
+                ctx.fillStyle = 'white';
+                ctx.font = getFont(24);
+                ctx.textAlign = 'left';
+                ctx.fillText(`Zdrowie: ${health}`, 50, 50);
+                ctx.fillText(`Inventarz: ${inventory.length ? inventory.join(', ') : 'pusty'}`, 50, 90);
+
+                // Room desc
+                ctx.font = getFont(28);
+                const lines = wrapText(room.desc, WIDTH - 120, 28);
+                lines.forEach((line, i) => ctx.fillText(line, 60, 150 + i*35));
+
+                // Options
+                ctx.font = getFont(32);
+                room.options.forEach((opt, i) => {
+                    ctx.fillStyle = 'red';
+                    ctx.fillText(`${i+1}`, 60, 400 + i*60);
+                    ctx.fillStyle = 'white';
+                    ctx.fillText(opt, 120, 400 + i*60);
+                });
+
+                // Message
+                if (messageTimer > 0) {
+                    ctx.fillStyle = 'red';
+                    ctx.font = getFont(32);
+                    ctx.textAlign = 'center';
+                    ctx.fillText(message, WIDTH/2, HEIGHT - 100);
+                    messageTimer--;
+                    if (messageTimer === 0) message = '';
+                }
+                ctx.textAlign = 'left';
+
+            } else if (state === 'win') {
+                ctx.fillStyle = 'green';
+                ctx.font = getFont(48);
+                ctx.textAlign = 'center';
+                ctx.fillText('UCIEKŁEŚ! WYGRANA!', WIDTH/2, HEIGHT/2);
+                ctx.fillStyle = 'white';
+                ctx.font = getFont(32);
+                ctx.fillText('R - ponownie | ESC - wyjście', WIDTH/2, HEIGHT/2 + 100);
+                ctx.textAlign = 'left';
+            } else if (state === 'game_over') {
+                ctx.fillStyle = 'red';
+                ctx.font = getFont(48);
+                ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER - POCHŁONĘTY', WIDTH/2, HEIGHT/2);
+                ctx.fillStyle = 'white';
+                ctx.font = getFont(32);
+                ctx.fillText('R - ponownie | ESC - wyjście', WIDTH/2, HEIGHT/2 + 100);
+                ctx.textAlign = 'left';
+            }
+        }
+
+        function handleChoice(choice) {
+            const room = rooms[currentRoom];
+            if (choice >= room.options.length || choice < 0) return;
+            const target = room.targets[choice];
+            let healthLoss = 0;
+            let item = null;
+            message = '';
+
+            // Full logic ported from Python
+            if (currentRoom === 'salon' && choice === 0) { // TV
+                message = 'Telewizor włącza się sam! Pokazuje Twoją twarz... z duchem za Tobą!';
+                flicker = 60;
+                healthLoss = inventory.includes('latarka') ? 10 : 20;
+            } else if (currentRoom === 'salon' && choice === 1) { // Szafka
+                if (Math.random() < 0.5) {
+                    item = 'latarka';
+                    message = 'Znalazłeś działającą latarkę!';
+                } else {
+                    message = 'Szafka pusta... ale czujesz czyjeś spojrzenie.';
+                }
+            } else if (currentRoom === 'kuchnia' && choice === 0) { // Nóż
+                item = 'noz';
+                message = 'Wziąłeś ostry nóż.';
+            } else if (currentRoom === 'kuchnia' && choice === 1) { // Lodówka
+                message = 'W lodówce gnijąca głowa! Wyciąga rękę!';
+                flicker = 45;
+                healthLoss = 30;
+            } else if (currentRoom === 'lazienka' && choice === 0) { // Wanna
+                if (Math.random() < 0.5) {
+                    if (!inventory.includes('krzyz')) {
+                        item = 'krzyz';
+                        message = 'W mule leży stary święty krzyż!';
+                    } else {
+                        message = 'Już masz krzyż.';
+                    }
+                } else {
+                    message = 'Z wanny wychodzi blada ręka!';
+                    flicker = 30;
+                    healthLoss = 15;
+                }
+            } else if (currentRoom === 'lazienka' && choice === 1) { // Lustro
+                message = 'W lustrze widzisz siebie... ale oczy są czarne!';
+                flicker = 60;
+                healthLoss = inventory.includes('krzyz') ? 0 : 25;
+                if (inventory.includes('krzyz')) message += ' Krzyż błyszczy i odpędza zło!';
+            } else if (currentRoom === 'piwnica' && choice === 0) { // Latarka
+                if (!inventory.includes('latarka')) {
+                    message = 'Nie masz latarki! Ciemność Cię atakuje!';
+                    flicker = 90;
+                    healthLoss = 50;
+                } else {
+                    item = 'klucz';
+                    message = 'Latarka oświetla stos kości. Pod nimi klucz do skrzyni!';
+                }
+            } else if (currentRoom === 'piwnica' && choice === 1) { // Głębiej
+                message = 'Idziesz w ciemność... coś wielkiego Cię chwyta!';
+                flicker = 120;
+                healthLoss = 100;
+            } else if (currentRoom === 'sypialnia1' && choice === 0) { // Skrzynia
+                if (inventory.includes('klucz')) {
+                    state = 'win';
+                    message = 'Klucz pasuje! Otwierasz skrzynię - tunel ucieczki! Udało się!';
+                    return;
+                } else {
+                    message = 'Skrzynia zamknięta na klucz. Potrzebujesz klucza.';
+                }
+            } else if (currentRoom === 'sypialnia1' && choice === 1) { // Szafa
+                message = 'W szafie stara lalka... jej głowa się obraca!';
+                flicker = 45;
+                healthLoss = 25;
+            } else if (currentRoom === 'sypialnia2' && choice === 0) { // Lustro
+                message = 'Twoja odbicie mruga... gdy Ty nie mrugasz!';
+                flicker = 75;
+                healthLoss = inventory.includes('krzyz') ? 0 : 30;
+                if (inventory.includes('krzyz')) message += ' Krzyż rozbija lustro!';
+            } else if (currentRoom === 'sypialnia2' && choice === 1) { // Pod łóżkiem
+                if (Math.random() < 0.5) {
+                    message = 'Pod łóżkiem czai się cienista postać!';
+                    flicker = 30;
+                    healthLoss = 20;
+                } else {
+                    item = 'latarka';
+                    message = 'Zapasowa latarka w kurzach!';
+                }
+            } else if (currentRoom === 'strych' && choice === 0) { // Drzwi
+                if (inventory.includes('noz') && inventory.includes('klucz')) {
+                    state = 'win';
+                    message = 'Nożem przecinasz łańcuch, kluczem otwierasz! Wyjście na dach - wolność!';
+                    return;
+                } else {
+                    message = 'Drzwi otwierają się same... z mroku wychodzi bestia!';
+                    flicker = 120;
+                    healthLoss = 40;
+                }
+            } else if (currentRoom === 'strych' && choice === 1) { // Pudła
+                if (Math.random() < 0.4) {
+                    if (!inventory.includes('krzyz')) {
+                        item = 'krzyz';
+                        message = 'W pudle stary krzyż ochronny!';
+                    } else {
+                        message = 'Znasz te pudła.';
+                    }
+                } else {
+                    message = 'Ogromny pająk gryzie Cię!';
+                    healthLoss = 10;
+                }
+            }
+
+            if (item && !inventory.includes(item)) inventory.push(item);
+            health -= healthLoss;
+            currentRoom = target;
+            messageTimer = 180;
+
+            if (health <= 0) {
+                state = 'game_over';
+            }
+        }
+
+        function resetGame() {
+            state = 'menu';
+            currentRoom = 'hol';
+            inventory = [];
+            health = 100;
+            message = '';
+            messageTimer = 0;
+            flicker = 0;
+            ghostTimer = 0;
+        }
+
+        // Input
+        const keys = {};
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (state === 'menu' && e.code === 'Space') {
+                state = 'game';
+            } else if (state === 'game') {
+                if (e.key === '1') handleChoice(0);
+                if (e.key === '2') handleChoice(1);
+                if (e.key === '3') handleChoice(2);
+                if (e.key === '4') handleChoice(3);
+            } else if (state === 'win' || state === 'game_over') {
+                if (e.key.toLowerCase() === 'r') resetGame();
+                if (e.key === 'Escape') window.close();
+            }
+            if (e.key === 'Escape' && state === 'game') window.close();
+        });
+
+        function gameLoop() {
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+</html>
